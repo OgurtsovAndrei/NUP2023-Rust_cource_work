@@ -3,7 +3,7 @@ use std::fs::DirEntry;
 
 fn main() {
     let path = get_directory_from_cli_args();
-    let path_metadata = fs::metadata(path);
+    let path_metadata = fs::metadata(&path);
 
     match path_metadata {
         Ok(metadata) => {
@@ -25,7 +25,7 @@ fn main() {
     }
 }
 
-fn get_directory_from_cli_args() -> &String {
+fn get_directory_from_cli_args() -> String {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
@@ -33,7 +33,7 @@ fn get_directory_from_cli_args() -> &String {
         std::process::exit(1);
     }
 
-    let path = &args[1];
+    let path = args[1].clone();
     path
 }
 
