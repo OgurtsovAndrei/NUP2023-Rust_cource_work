@@ -25,10 +25,12 @@ struct Directory {
     entry: DirEntry
 }
 
-impl FileSystemEntry for File {
+impl File {
     fn new(entry: DirEntry) -> Self { Self { entry } }
+}
+impl FileSystemEntry for File {
 
-    fn process_entry(&self, lookup_config: LookupConfig) -> (bool, String) {
+    fn process_entry(&self, lookup_config: &LookupConfig) -> (bool, String) {
         if let Some(file_name) = self.entry.file_name().to_str() {
             if file_name.contains(&lookup_config.target_substring) {
                 return (true, format!("File\t: {}{file_name}\n", lookup_config.prefix_print))
@@ -39,10 +41,12 @@ impl FileSystemEntry for File {
 }
 
 
-impl FileSystemEntry for Directory {
+impl Directory {
     fn new(entry: DirEntry) -> Self { Directory { entry } }
+}
+impl FileSystemEntry for Directory {
 
-    fn process_entry(&self, lookup_config: LookupConfig) -> (bool, String) {
+    fn process_entry(&self, lookup_config: &LookupConfig) -> (bool, String) {
         if let Some(dir_name) = self.entry.file_name().to_str() {
             let new_prefix: String = format!("{}  | ", lookup_config.prefix_print);
             let mut new_subst: String = lookup_config.target_substring.to_string();
@@ -58,8 +62,7 @@ impl FileSystemEntry for Directory {
 }
 
 trait FileSystemEntry {
-    fn new(entry: DirEntry) -> Self;
-    fn process_entry(&self, lookup_config: LookupConfig) -> (bool, String);
+    fn process_entry(&self, lookup_config: &LookupConfig) -> (bool, String);
 }
 
 
@@ -88,7 +91,7 @@ fn process_dir(path: &str, lookup_config: LookupConfig) -> (bool, String) {
     let mut body: String = empty_string();
     if let Ok(entries) = fs::read_dir(path) {
         for entry in entries {
-            let (res, res_body) = process_entry(entry, lookup_config.clone());
+            let (res, res_body) = process_entry(entry, &lookup_config);
             is_not_empty |= res;
             if res { body.push_str(&res_body) }
         }
@@ -116,7 +119,7 @@ fn get_directory_from_cli_args() -> (String, String) {
     (path, find_substr)
 }
 
-fn process_entry(entry: Result<DirEntry, std::io::Error>, lookup_config: LookupConfig) -> (bool, String) {
+fn process_entry(entry: Result<DirEntry, std::io::Error>, lookup_config: &LookupConfig) -> (bool, String) {
     let entry = entry.expect("Failed to read directory entry\n");
     let entry_path = entry.path();
     if entry_path.is_file() {
