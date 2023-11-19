@@ -4,122 +4,176 @@ use std::fs::DirEntry;
 #[derive(Clone)]
 struct LookupConfig {
     prefix_print: String,
-    target_substring: String
+    target_substring: String,
+    write_full_path: bool,
 }
 
 impl LookupConfig {
-    fn new(prefix_print: String, target_substring: String) -> LookupConfig{
+    fn new(prefix_print: String, target_substring: String, write_full_path: bool) -> LookupConfig {
         LookupConfig {
             prefix_print,
-            target_substring
+            target_substring,
+            write_full_path
         }
     }
 }
 
+struct LookupResult {
+    is_successful: bool,
+    body: Vec<String>,
+}
 
 struct File {
-    entry: DirEntry
+    entry: DirEntry,
 }
 
 struct Directory {
-    entry: DirEntry
+    entry: DirEntry,
 }
 
 impl File {
     fn new(entry: DirEntry) -> Self { Self { entry } }
 }
-impl FileSystemEntry for File {
 
-    fn process_entry(&self, lookup_config: &LookupConfig) -> (bool, String) {
+impl FileSystemEntry for File {
+    fn process_entry(&self, lookup_config: &LookupConfig) -> LookupResult {
         if let Some(file_name) = self.entry.file_name().to_str() {
             if file_name.contains(&lookup_config.target_substring) {
-                return (true, format!("File\t: {}{file_name}\n", lookup_config.prefix_print))
+                return LookupResult { is_successful: true, body: vec![format!("File\t: {}{file_name}", lookup_config.prefix_print)] };
             }
         }
-        return (false, empty_string())
+        return LookupResult { is_successful: false, body: vec![] };
     }
 }
-
 
 impl Directory {
     fn new(entry: DirEntry) -> Self { Directory { entry } }
 }
-impl FileSystemEntry for Directory {
 
-    fn process_entry(&self, lookup_config: &LookupConfig) -> (bool, String) {
+impl FileSystemEntry for Directory {
+    fn process_entry(&self, lookup_config: &LookupConfig) -> LookupResult {
         if let Some(dir_name) = self.entry.file_name().to_str() {
-            let new_prefix: String = format!("{}  | ", lookup_config.prefix_print);
+            let new_prefix: String;
+            if lookup_config.write_full_path { new_prefix = format!("{}{dir_name}/", lookup_config.prefix_print); }
+            else { new_prefix = format!("{}  | ", lookup_config.prefix_print); }
             let mut new_subst: String = lookup_config.target_substring.to_string();
             if dir_name.contains(&lookup_config.target_substring) { new_subst = empty_string() }
-            let (res, res_body) = process_dir(self.entry.path().to_str().unwrap(),
-                                              LookupConfig::new(new_prefix, new_subst));
-            if res {
-                return (res, format!("Dir\t: {}{dir_name}\n{res_body}", lookup_config.prefix_print));
+            let mut result = process_dir(self.entry.path().to_str().unwrap(),
+                                         LookupConfig::new(new_prefix, new_subst, lookup_config.write_full_path));
+            if result.is_successful {
+                let dir_string = format!("Dir\t: {}{dir_name}", lookup_config.prefix_print);
+                result.body.insert(0, dir_string);
+                return LookupResult { is_successful: result.is_successful, body: result.body};
             }
         }
-        return (false, empty_string());
+        return LookupResult { is_successful: false, body: vec![] };
     }
 }
 
 trait FileSystemEntry {
-    fn process_entry(&self, lookup_config: &LookupConfig) -> (bool, String);
+    fn process_entry(&self, lookup_config: &LookupConfig) -> LookupResult;
 }
 
 
-
 fn main() {
-    let (path, find_substr) = get_directory_from_cli_args();
-    let path_metadata = fs::metadata(&path);
+    let settings = get_directory_from_cli_args();
+    let path_metadata = fs::metadata(&settings.start_path);
 
     match path_metadata {
         Ok(metadata) => {
             if !metadata.is_dir() {
-                eprintln!("It is not a directory: {}", path);
+                eprintln!("It is not a directory: {}", settings.start_path);
                 return;
             }
-            let (res, body) = process_dir(&path, LookupConfig::new(empty_string(), find_substr));
-            if res { println!("{}", body) }
+            let result = process_dir(&settings.start_path, LookupConfig::new(empty_string(), settings.target_substring, settings.sort_files));
+            if result.is_successful { println!("{}", parse_result_vector(result.body)) }
+            else { println!("Nothing to show"); }
         }
         Err(_) => {
-            eprintln!("No such directory: {}", path);
+            eprintln!("No such directory: {}", settings.start_path);
         }
     }
 }
 
-fn process_dir(path: &str, lookup_config: LookupConfig) -> (bool, String) {
+fn parse_result_vector(mut result: Vec<String>) -> String {
+    let mut parsed: Vec<Vec<String>> = vec![];
+    for entry in &result {
+        let parsed_entry: Vec<String> = entry.split('/').map(|s| s.to_owned()).collect();
+        parsed.push(parsed_entry);
+    }
+
+    fn sort_by_last_predicate<T: PartialOrd>(a: &Vec<T>, b: &Vec<T>) -> bool {
+        return a.last() < b.last();
+    }
+    parsed = insertion_sort(parsed, sort_by_last_predicate);
+    for (index, entry) in parsed.iter().enumerate() {
+        result[index] = entry.join("/")
+    }
+    return result.join("\n");
+}
+
+fn insertion_sort<T: PartialOrd, Fun>(mut vec: Vec<T>, predicate: Fun) -> Vec<T>
+    where Fun: Fn(&T, &T) -> bool {
+    let len = vec.len();
+
+    for i in 1..len {
+        let mut j = i;
+
+        while j > 0 && predicate(&vec[j], &vec[j - 1]) {
+            vec.swap(j, j - 1);
+            j -= 1;
+        }
+    }
+    vec
+}
+
+fn process_dir(path: &str, lookup_config: LookupConfig) -> LookupResult {
     let mut is_not_empty = false;
-    let mut body: String = empty_string();
+    let mut body: Vec<String> = vec![];
     if let Ok(entries) = fs::read_dir(path) {
         for entry in entries {
-            let (res, res_body) = process_entry(entry, &lookup_config);
-            is_not_empty |= res;
-            if res { body.push_str(&res_body) }
+            let result = process_entry(entry, &lookup_config);
+            is_not_empty |= result.is_successful;
+            if result.is_successful {
+                body.extend(result.body)
+            }
         }
     } else {
-        body.push_str(&(format!("{}Problem occurred during reading the directory\n", lookup_config.prefix_print)))
+        body.push(format!("{}Problem occurred during reading the directory\n", lookup_config.prefix_print))
     }
-    return (is_not_empty, body);
+    return LookupResult { is_successful: is_not_empty, body };
 }
 
-fn get_directory_from_cli_args() -> (String, String) {
+struct Settings {
+    start_path: String,
+    target_substring: String,
+    sort_files: bool,
+}
+
+fn get_directory_from_cli_args() -> Settings {
     let args: Vec<String> = env::args().collect();
-    let path;
+
+    let mut settings: Settings = Settings {
+        start_path: empty_string(),
+        target_substring: empty_string(),
+        sort_files: false,
+    };
 
     if args.len() < 2 {
-        path = String::from("./");
+        settings.start_path = String::from("./");
     } else {
-        path = args[1].clone();
+        settings.start_path = args[1].clone();
     }
 
-    let mut find_substr = empty_string();
-    if args.len() >= 4 {
-        if args[2] == "--find" { find_substr = args[3].to_string() }
+    for arg_index in 2..args.len() {
+        if args[arg_index] == "--find" { settings.target_substring = args[arg_index + 1].to_string() }
+        if args[arg_index] == "--sort" { settings.sort_files = true }
     }
 
-    (path, find_substr)
+    settings
 }
 
-fn process_entry(entry: Result<DirEntry, std::io::Error>, lookup_config: &LookupConfig) -> (bool, String) {
+fn process_entry(entry: Result<DirEntry, std::io::Error>, lookup_config: &LookupConfig) -> LookupResult {
     let entry = entry.expect("Failed to read directory entry\n");
     let entry_path = entry.path();
     if entry_path.is_file() {
@@ -129,7 +183,7 @@ fn process_entry(entry: Result<DirEntry, std::io::Error>, lookup_config: &Lookup
         let current_dir = Directory::new(entry);
         return current_dir.process_entry(lookup_config);
     }
-    return (false, empty_string());
+    return LookupResult { is_successful: false, body: vec![] };
 }
 
 fn empty_string() -> String {
