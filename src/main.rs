@@ -1,125 +1,12 @@
-use std::{env, fs, io};
-use std::fs::{DirEntry, File};
-use std::io::{BufRead, Write};
-use std::path::Path;
+use std::{env, fs};
+use std::rc::Rc;
+use lookup_engine::{DirectoryEntry, LookupConfig};
 
-#[derive(Clone)]
-struct LookupConfig {
-    prefix_print: String,
-    target_substring: String,
-    write_full_path: bool,
-}
+use writers::{ConsoleWriter, FileWriter, Writer};
 
-impl LookupConfig {
-    fn new(prefix_print: String, target_substring: String, write_full_path: bool) -> LookupConfig {
-        LookupConfig {
-            prefix_print,
-            target_substring,
-            write_full_path,
-        }
-    }
-}
-
-struct LookupResult {
-    is_successful: bool,
-    body: Vec<LookupResultEntry>,
-}
-
-struct LookupResultEntry {
-    some_prefix: String,
-    path: String,
-    filename: String,
-    /*    If is_file is false, filename must be empty string!    */
-    is_file: bool,
-}
-
-impl LookupResultEntry {
-    fn get_full_path(&self) -> String {
-        return format!("{}{}{}", self.some_prefix, self.path, self.filename);
-    }
-}
-
-struct FileEntry {
-    entry: DirEntry,
-}
-
-impl FileEntry {
-    fn new(entry: DirEntry) -> Self { Self { entry } }
-}
-
-struct DirectoryEntry {
-    entry: DirEntry,
-}
-
-impl DirectoryEntry {
-    fn new(entry: DirEntry) -> Self { DirectoryEntry { entry } }
-}
-
-trait FileSystemEntry {
-    fn process_entry(&self, lookup_config: &LookupConfig) -> LookupResult;
-}
-
-impl FileSystemEntry for FileEntry {
-    fn process_entry(&self, lookup_config: &LookupConfig) -> LookupResult {
-        if let Some(file_name) = self.entry.file_name().to_str() {
-            if file_name.contains(&lookup_config.target_substring) {
-                let lookup_result_entry = LookupResultEntry {
-                    some_prefix: String::from("File    : "),
-                    path: lookup_config.prefix_print.clone(),
-                    filename: String::from(file_name),
-                    is_file: true,
-                };
-                return LookupResult { is_successful: true, body: vec![lookup_result_entry] };
-            }
-        }
-        return LookupResult { is_successful: false, body: vec![] };
-    }
-}
-
-impl FileSystemEntry for DirectoryEntry {
-    fn process_entry(&self, lookup_config: &LookupConfig) -> LookupResult {
-        if let Some(dir_name) = self.entry.file_name().to_str() {
-            let new_prefix: String;
-            if lookup_config.write_full_path { new_prefix = format!("{}{dir_name}/", lookup_config.prefix_print); } else { new_prefix = format!("{}  | ", lookup_config.prefix_print); }
-            let mut new_subst: String = lookup_config.target_substring.to_string();
-            if dir_name.contains(&lookup_config.target_substring) { new_subst = empty_string() }
-            let mut result = process_dir(self.entry.path().to_str().unwrap(),
-                                         LookupConfig::new(new_prefix, new_subst, lookup_config.write_full_path));
-            if result.is_successful {
-                let dir_string = LookupResultEntry { some_prefix: String::from("Dir     : "), path: format!("{}{dir_name}", lookup_config.prefix_print), filename: empty_string(), is_file: false };
-                result.body.insert(0, dir_string);
-                return LookupResult { is_successful: result.is_successful, body: result.body };
-            }
-        }
-        return LookupResult { is_successful: false, body: vec![] };
-    }
-}
-
-trait Writer {
-    fn write(&self, text: &String);
-}
-
-struct ConsoleWriter;
-
-struct FileWriter {
-    file_name: String,
-}
-
-impl Writer for ConsoleWriter {
-    fn write(&self, text: &String) {
-        println!("{}", text)
-    }
-}
-
-impl Writer for FileWriter {
-    fn write(&self, text: &String) {
-        let mut file = File::create(&self.file_name).expect("Unable to create file");
-        match file.write_all(text.as_bytes()) {
-            Ok(_) => println!("Result was written to file {}", &self.file_name),
-            Err(e) => eprintln!("Error accursed during writing to file: {}", e)
-        }
-    }
-}
+mod postprocess;
+mod writers;
+mod lookup_engine;
 
 fn main() {
     let settings = get_directory_from_cli_args();
@@ -131,9 +18,10 @@ fn main() {
                 eprintln!("It is not a directory: {}", settings.start_path);
                 return;
             }
-            let result = process_dir(&settings.start_path,
-                                     LookupConfig::new(empty_string(), settings.target_substring.clone(), settings.sort_files));
-            let parsed_and_sorted_result = parse_result_vector(result.body, &settings);
+            let result = lookup_engine::process_dir(&settings.start_path,
+                                                    LookupConfig::new(empty_string(), settings.target_substring.clone(), settings.sort_files),
+                                                    Rc::new(DirectoryEntry::create_empty()));
+            let parsed_and_sorted_result = postprocess::parse_result_vector(result.body, &settings);
             if result.is_successful {
                 settings.writer.write(&parsed_and_sorted_result)
             } else { println!("Nothing to show"); }
@@ -144,110 +32,13 @@ fn main() {
     }
 }
 
-fn process_dir(path: &str, lookup_config: LookupConfig) -> LookupResult {
-    let mut is_not_empty = false;
-    let mut body: Vec<LookupResultEntry> = vec![];
-    if let Ok(entries) = fs::read_dir(path) {
-        for entry in entries {
-            let result = process_entry(entry, &lookup_config);
-            is_not_empty |= result.is_successful;
-            if result.is_successful {
-                body.extend(result.body)
-            }
-        }
-    } else {
-        let lookup_fail = LookupResultEntry {
-            some_prefix: "Problem occurred during reading the directory --->> ".to_string(),
-            path: lookup_config.prefix_print,
-            filename: "".to_string(),
-            is_file: false,
-        };
-        body.push(lookup_fail)
-    }
-    return LookupResult { is_successful: is_not_empty, body };
-}
-
-fn process_entry(entry: Result<DirEntry, std::io::Error>, lookup_config: &LookupConfig) -> LookupResult {
-    let entry = entry.expect("Failed to read directory entry\n");
-    let entry_path = entry.path();
-    if entry_path.is_file() {
-        let current_file = FileEntry::new(entry);
-        return current_file.process_entry(lookup_config);
-    } else if entry_path.is_dir() {
-        let current_dir = DirectoryEntry::new(entry);
-        return current_dir.process_entry(lookup_config);
-    }
-    return LookupResult { is_successful: false, body: vec![] };
-}
-
-fn parse_result_vector(mut result: Vec<LookupResultEntry>, settings: &Settings) -> String {
-    fn sort_by_last_predicate(a: &LookupResultEntry, b: &LookupResultEntry) -> bool {
-        return a.filename < b.filename;
-    }
-
-    if settings.sort_files {
-        result = result.into_iter().filter(|entry| entry.is_file).collect::<Vec<LookupResultEntry>>();
-        result = insertion_sort(result, sort_by_last_predicate);
-    }
-
-    // return result.iter().map(|entry| entry.get_full_path()).collect::<Vec<String>>().join("\n");
-    return result.iter().map(|entry| process_one_file(entry, settings)).collect::<Vec<String>>().join("\n");
-}
-
-fn process_one_file(file: &LookupResultEntry, settings: &Settings) -> String {
-    let mut result = file.get_full_path() + "\n";
-    if !settings.look_for_key_entry_in_files { return result }
-    let prefix = " ".repeat(8) + "--> ";
-    let key_entries: Vec<String>;
-    let key_entries_res = look_for_key_in_file(&format!("{}{}", file.path, file.filename), &settings.key_in_file);
-    match key_entries_res {
-        Ok(data) => {key_entries = data}
-        Err(_) => {return empty_string()}
-    }
-    for key_entry in key_entries.iter() {
-        result.push_str(&format!("{}{}\n", prefix, key_entry))
-    }
-    return result
-}
-
-fn look_for_key_in_file(filename: &str, key: &str) -> io::Result<Vec<String>> {
-    let path = Path::new(filename);
-    let file = File::open(&path)?;
-    let reader = io::BufReader::new(file);
-
-    let mut results = Vec::new();
-
-    for line in reader.lines() {
-        let line = line?;
-        if line.contains(key) {
-            results.push(line);
-        }
-    }
-    Ok(results)
-}
-
-fn insertion_sort<T, Fun>(mut vec: Vec<T>, predicate: Fun) -> Vec<T>
-    where Fun: Fn(&T, &T) -> bool {
-    let len = vec.len();
-
-    for i in 1..len {
-        let mut j = i;
-
-        while j > 0 && predicate(&vec[j], &vec[j - 1]) {
-            vec.swap(j, j - 1);
-            j -= 1;
-        }
-    }
-    vec
-}
-
 struct Settings {
     start_path: String,
     target_substring: String,
     sort_files: bool,
     writer: Box<dyn Writer>,
     look_for_key_entry_in_files: bool,
-    key_in_file: String
+    key_in_file: String,
 }
 
 fn get_directory_from_cli_args() -> Settings {
