@@ -94,6 +94,31 @@ impl FileSystemEntry for DirectoryEntry {
     }
 }
 
+trait Writer {
+    fn write(&self, text: &String);
+}
+
+struct ConsoleWriter;
+
+struct FileWriter {
+    file_name: String,
+}
+
+impl Writer for ConsoleWriter {
+    fn write(&self, text: &String) {
+        println!("{}", text)
+    }
+}
+
+impl Writer for FileWriter {
+    fn write(&self, text: &String) {
+        let mut file = File::create(&self.file_name).expect("Unable to create file");
+        match file.write_all(text.as_bytes()) {
+            Ok(_) => println!("Result was written to file {}", &self.file_name),
+            Err(e) => eprintln!("Error accursed during writing to file: {}", e)
+        }
+    }
+}
 
 fn main() {
     let settings = get_directory_from_cli_args();
@@ -109,13 +134,7 @@ fn main() {
                                      LookupConfig::new(empty_string(), settings.target_substring.clone(), settings.sort_files));
             let parsed_and_sorted_result = parse_result_vector(result.body, &settings);
             if result.is_successful {
-                if settings.write_to_file {
-                    let mut file = File::create(&settings.out_file_name).expect("Unable to create file");
-                    match file.write_all(parsed_and_sorted_result.as_bytes()) {
-                        Ok(_) => println!("Result was written to file {}", &settings.out_file_name),
-                        Err(e) => eprintln!("Error accursed during writing to file: {}", e),
-                    }
-                } else { println!("{}", parsed_and_sorted_result) }
+                settings.writer.write(&parsed_and_sorted_result)
             } else { println!("Nothing to show"); }
         }
         Err(_) => {
@@ -192,8 +211,7 @@ struct Settings {
     start_path: String,
     target_substring: String,
     sort_files: bool,
-    write_to_file: bool,
-    out_file_name: String,
+    writer: Box<dyn Writer>,
 }
 
 fn get_directory_from_cli_args() -> Settings {
@@ -203,8 +221,7 @@ fn get_directory_from_cli_args() -> Settings {
         start_path: empty_string(),
         target_substring: empty_string(),
         sort_files: false,
-        write_to_file: false,
-        out_file_name: empty_string(),
+        writer: Box::new(ConsoleWriter),
     };
 
     if args.len() < 2 {
@@ -216,8 +233,8 @@ fn get_directory_from_cli_args() -> Settings {
     for arg_index in 2..args.len() {
         if args[arg_index] == "--find" { settings.target_substring = args[arg_index + 1].to_string() }
         if args[arg_index] == "--to_file" {
-            settings.out_file_name = args[arg_index + 1].to_string();
-            settings.write_to_file = true
+            let file_name = args[arg_index + 1].to_string();
+            settings.writer = Box::new(FileWriter { file_name })
         }
         if args[arg_index] == "--sort" { settings.sort_files = true }
     }
