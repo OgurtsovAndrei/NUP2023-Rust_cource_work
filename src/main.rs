@@ -1,6 +1,5 @@
 use std::{env, fs};
-use std::fs::{DirEntry, File};
-use std::io::Write;
+use std::fs::DirEntry;
 
 #[derive(Clone)]
 struct LookupConfig {
@@ -14,111 +13,67 @@ impl LookupConfig {
         LookupConfig {
             prefix_print,
             target_substring,
-            write_full_path,
+            write_full_path
         }
     }
 }
 
 struct LookupResult {
     is_successful: bool,
-    body: Vec<LookupResultEntry>,
+    body: Vec<String>,
 }
 
-struct LookupResultEntry {
-    some_prefix: String,
-    path: String,
-    filename: String,
-    /*    If is_file is false, filename must be empty string!    */
-    is_file: bool,
-}
-
-impl LookupResultEntry {
-    fn get_full_path(&self) -> String {
-        return format!("{}{}{}", self.some_prefix, self.path, self.filename);
-    }
-}
-
-struct FileEntry {
+struct File {
     entry: DirEntry,
 }
 
-impl FileEntry {
+struct Directory {
+    entry: DirEntry,
+}
+
+impl File {
     fn new(entry: DirEntry) -> Self { Self { entry } }
 }
 
-struct DirectoryEntry {
-    entry: DirEntry,
+impl FileSystemEntry for File {
+    fn process_entry(&self, lookup_config: &LookupConfig) -> LookupResult {
+        if let Some(file_name) = self.entry.file_name().to_str() {
+            if file_name.contains(&lookup_config.target_substring) {
+                return LookupResult { is_successful: true, body: vec![format!("File\t: {}{file_name}", lookup_config.prefix_print)] };
+            }
+        }
+        return LookupResult { is_successful: false, body: vec![] };
+    }
 }
 
-impl DirectoryEntry {
-    fn new(entry: DirEntry) -> Self { DirectoryEntry { entry } }
+impl Directory {
+    fn new(entry: DirEntry) -> Self { Directory { entry } }
+}
+
+impl FileSystemEntry for Directory {
+    fn process_entry(&self, lookup_config: &LookupConfig) -> LookupResult {
+        if let Some(dir_name) = self.entry.file_name().to_str() {
+            let new_prefix: String;
+            if lookup_config.write_full_path { new_prefix = format!("{}{dir_name}/", lookup_config.prefix_print); }
+            else { new_prefix = format!("{}  | ", lookup_config.prefix_print); }
+            let mut new_subst: String = lookup_config.target_substring.to_string();
+            if dir_name.contains(&lookup_config.target_substring) { new_subst = empty_string() }
+            let mut result = process_dir(self.entry.path().to_str().unwrap(),
+                                         LookupConfig::new(new_prefix, new_subst, lookup_config.write_full_path));
+            if result.is_successful {
+                let dir_string = format!("Dir\t: {}{dir_name}", lookup_config.prefix_print);
+                result.body.insert(0, dir_string);
+                return LookupResult { is_successful: result.is_successful, body: result.body};
+            }
+        }
+        return LookupResult { is_successful: false, body: vec![] };
+    }
 }
 
 trait FileSystemEntry {
     fn process_entry(&self, lookup_config: &LookupConfig) -> LookupResult;
 }
 
-impl FileSystemEntry for FileEntry {
-    fn process_entry(&self, lookup_config: &LookupConfig) -> LookupResult {
-        if let Some(file_name) = self.entry.file_name().to_str() {
-            if file_name.contains(&lookup_config.target_substring) {
-                let lookup_result_entry = LookupResultEntry {
-                    some_prefix: String::from("File    : "),
-                    path: lookup_config.prefix_print.clone(),
-                    filename: String::from(file_name),
-                    is_file: true,
-                };
-                return LookupResult { is_successful: true, body: vec![lookup_result_entry] };
-            }
-        }
-        return LookupResult { is_successful: false, body: vec![] };
-    }
-}
-
-impl FileSystemEntry for DirectoryEntry {
-    fn process_entry(&self, lookup_config: &LookupConfig) -> LookupResult {
-        if let Some(dir_name) = self.entry.file_name().to_str() {
-            let new_prefix: String;
-            if lookup_config.write_full_path { new_prefix = format!("{}{dir_name}/", lookup_config.prefix_print); } else { new_prefix = format!("{}  | ", lookup_config.prefix_print); }
-            let mut new_subst: String = lookup_config.target_substring.to_string();
-            if dir_name.contains(&lookup_config.target_substring) { new_subst = empty_string() }
-            let mut result = process_dir(self.entry.path().to_str().unwrap(),
-                                         LookupConfig::new(new_prefix, new_subst, lookup_config.write_full_path));
-            if result.is_successful {
-                let dir_string = LookupResultEntry { some_prefix: String::from("Dir     : "), path: format!("{}{dir_name}", lookup_config.prefix_print), filename: empty_string(), is_file: false };
-                result.body.insert(0, dir_string);
-                return LookupResult { is_successful: result.is_successful, body: result.body };
-            }
-        }
-        return LookupResult { is_successful: false, body: vec![] };
-    }
-}
-
-trait Writer {
-    fn write(&self, text: &String);
-}
-
-struct ConsoleWriter;
-
-struct FileWriter {
-    file_name: String,
-}
-
-impl Writer for ConsoleWriter {
-    fn write(&self, text: &String) {
-        println!("{}", text)
-    }
-}
-
-impl Writer for FileWriter {
-    fn write(&self, text: &String) {
-        let mut file = File::create(&self.file_name).expect("Unable to create file");
-        match file.write_all(text.as_bytes()) {
-            Ok(_) => println!("Result was written to file {}", &self.file_name),
-            Err(e) => eprintln!("Error accursed during writing to file: {}", e)
-        }
-    }
-}
 
 fn main() {
     let settings = get_directory_from_cli_args();
@@ -130,12 +85,9 @@ fn main() {
                 eprintln!("It is not a directory: {}", settings.start_path);
                 return;
             }
-            let result = process_dir(&settings.start_path,
-                                     LookupConfig::new(empty_string(), settings.target_substring.clone(), settings.sort_files));
-            let parsed_and_sorted_result = parse_result_vector(result.body, &settings);
-            if result.is_successful {
-                settings.writer.write(&parsed_and_sorted_result)
-            } else { println!("Nothing to show"); }
+            let result = process_dir(&settings.start_path, LookupConfig::new(empty_string(), settings.target_substring, settings.sort_files));
+            if result.is_successful { println!("{}", parse_result_vector(result.body)) }
+            else { println!("Nothing to show"); }
         }
         Err(_) => {
             eprintln!("No such directory: {}", settings.start_path);
@@ -143,56 +95,24 @@ fn main() {
     }
 }
 
-fn process_dir(path: &str, lookup_config: LookupConfig) -> LookupResult {
-    let mut is_not_empty = false;
-    let mut body: Vec<LookupResultEntry> = vec![];
-    if let Ok(entries) = fs::read_dir(path) {
-        for entry in entries {
-            let result = process_entry(entry, &lookup_config);
-            is_not_empty |= result.is_successful;
-            if result.is_successful {
-                body.extend(result.body)
-            }
-        }
-    } else {
-        let lookup_fail = LookupResultEntry {
-            some_prefix: "Problem occurred during reading the directory --->> ".to_string(),
-            path: lookup_config.prefix_print,
-            filename: "".to_string(),
-            is_file: false,
-        };
-        body.push(lookup_fail)
+fn parse_result_vector(mut result: Vec<String>) -> String {
+    let mut parsed: Vec<Vec<String>> = vec![];
+    for entry in &result {
+        let parsed_entry: Vec<String> = entry.split('/').map(|s| s.to_owned()).collect();
+        parsed.push(parsed_entry);
     }
-    return LookupResult { is_successful: is_not_empty, body };
+
+    fn sort_by_last_predicate<T: PartialOrd>(a: &Vec<T>, b: &Vec<T>) -> bool {
+        return a.last() < b.last();
+    }
+    parsed = insertion_sort(parsed, sort_by_last_predicate);
+    for (index, entry) in parsed.iter().enumerate() {
+        result[index] = entry.join("/")
+    }
+    return result.join("\n");
 }
 
-fn process_entry(entry: Result<DirEntry, std::io::Error>, lookup_config: &LookupConfig) -> LookupResult {
-    let entry = entry.expect("Failed to read directory entry\n");
-    let entry_path = entry.path();
-    if entry_path.is_file() {
-        let current_file = FileEntry::new(entry);
-        return current_file.process_entry(lookup_config);
-    } else if entry_path.is_dir() {
-        let current_dir = DirectoryEntry::new(entry);
-        return current_dir.process_entry(lookup_config);
-    }
-    return LookupResult { is_successful: false, body: vec![] };
-}
-
-fn parse_result_vector(mut result: Vec<LookupResultEntry>, settings: &Settings) -> String {
-    fn sort_by_last_predicate(a: &LookupResultEntry, b: &LookupResultEntry) -> bool {
-        return a.filename < b.filename;
-    }
-
-    if settings.sort_files {
-        result = result.into_iter().filter(|entry| entry.is_file).collect::<Vec<LookupResultEntry>>();
-        result = insertion_sort(result, sort_by_last_predicate);
-    }
-
-    return result.iter().map(|entry| entry.get_full_path()).collect::<Vec<String>>().join("\n");
-}
-
-fn insertion_sort<T, Fun>(mut vec: Vec<T>, predicate: Fun) -> Vec<T>
+fn insertion_sort<T: PartialOrd, Fun>(mut vec: Vec<T>, predicate: Fun) -> Vec<T>
     where Fun: Fn(&T, &T) -> bool {
     let len = vec.len();
 
@@ -207,11 +127,27 @@ fn insertion_sort<T, Fun>(mut vec: Vec<T>, predicate: Fun) -> Vec<T>
     vec
 }
 
+fn process_dir(path: &str, lookup_config: LookupConfig) -> LookupResult {
+    let mut is_not_empty = false;
+    let mut body: Vec<String> = vec![];
+    if let Ok(entries) = fs::read_dir(path) {
+        for entry in entries {
+            let result = process_entry(entry, &lookup_config);
+            is_not_empty |= result.is_successful;
+            if result.is_successful {
+                body.extend(result.body)
+            }
+        }
+    } else {
+        body.push(format!("{}Problem occurred during reading the directory\n", lookup_config.prefix_print))
+    }
+    return LookupResult { is_successful: is_not_empty, body };
+}
+
 struct Settings {
     start_path: String,
     target_substring: String,
     sort_files: bool,
-    writer: Box<dyn Writer>,
 }
 
 fn get_directory_from_cli_args() -> Settings {
@@ -221,7 +157,6 @@ fn get_directory_from_cli_args() -> Settings {
         start_path: empty_string(),
         target_substring: empty_string(),
         sort_files: false,
-        writer: Box::new(ConsoleWriter),
     };
 
     if args.len() < 2 {
@@ -232,14 +167,23 @@ fn get_directory_from_cli_args() -> Settings {
 
     for arg_index in 2..args.len() {
         if args[arg_index] == "--find" { settings.target_substring = args[arg_index + 1].to_string() }
-        if args[arg_index] == "--to_file" {
-            let file_name = args[arg_index + 1].to_string();
-            settings.writer = Box::new(FileWriter { file_name })
-        }
         if args[arg_index] == "--sort" { settings.sort_files = true }
     }
 
     settings
+}
+
+fn process_entry(entry: Result<DirEntry, std::io::Error>, lookup_config: &LookupConfig) -> LookupResult {
+    let entry = entry.expect("Failed to read directory entry\n");
+    let entry_path = entry.path();
+    if entry_path.is_file() {
+        let current_file = File::new(entry);
+        return current_file.process_entry(lookup_config);
+    } else if entry_path.is_dir() {
+        let current_dir = Directory::new(entry);
+        return current_dir.process_entry(lookup_config);
+    }
+    return LookupResult { is_successful: false, body: vec![] };
 }
 
 fn empty_string() -> String {
