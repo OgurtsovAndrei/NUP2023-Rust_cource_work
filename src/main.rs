@@ -1,6 +1,7 @@
-use std::{env, fs};
+use std::{env, fs, io};
 use std::fs::{DirEntry, File};
-use std::io::Write;
+use std::io::{BufRead, Write};
+use std::path::Path;
 
 #[derive(Clone)]
 struct LookupConfig {
@@ -189,7 +190,40 @@ fn parse_result_vector(mut result: Vec<LookupResultEntry>, settings: &Settings) 
         result = insertion_sort(result, sort_by_last_predicate);
     }
 
-    return result.iter().map(|entry| entry.get_full_path()).collect::<Vec<String>>().join("\n");
+    // return result.iter().map(|entry| entry.get_full_path()).collect::<Vec<String>>().join("\n");
+    return result.iter().map(|entry| process_one_file(entry, settings)).collect::<Vec<String>>().join("\n");
+}
+
+fn process_one_file(file: &LookupResultEntry, settings: &Settings) -> String {
+    let mut result = file.get_full_path() + "\n";
+    if !settings.look_for_key_entry_in_files { return result }
+    let prefix = " ".repeat(8) + "--> ";
+    let key_entries: Vec<String>;
+    let key_entries_res = look_for_key_in_file(&format!("{}{}", file.path, file.filename), &settings.key_in_file);
+    match key_entries_res {
+        Ok(data) => {key_entries = data}
+        Err(_) => {return empty_string()}
+    }
+    for key_entry in key_entries.iter() {
+        result.push_str(&format!("{}{}\n", prefix, key_entry))
+    }
+    return result
+}
+
+fn look_for_key_in_file(filename: &str, key: &str) -> io::Result<Vec<String>> {
+    let path = Path::new(filename);
+    let file = File::open(&path)?;
+    let reader = io::BufReader::new(file);
+
+    let mut results = Vec::new();
+
+    for line in reader.lines() {
+        let line = line?;
+        if line.contains(key) {
+            results.push(line);
+        }
+    }
+    Ok(results)
 }
 
 fn insertion_sort<T, Fun>(mut vec: Vec<T>, predicate: Fun) -> Vec<T>
@@ -212,6 +246,8 @@ struct Settings {
     target_substring: String,
     sort_files: bool,
     writer: Box<dyn Writer>,
+    look_for_key_entry_in_files: bool,
+    key_in_file: String
 }
 
 fn get_directory_from_cli_args() -> Settings {
@@ -222,6 +258,8 @@ fn get_directory_from_cli_args() -> Settings {
         target_substring: empty_string(),
         sort_files: false,
         writer: Box::new(ConsoleWriter),
+        look_for_key_entry_in_files: false,
+        key_in_file: empty_string(),
     };
 
     if args.len() < 2 {
@@ -235,6 +273,10 @@ fn get_directory_from_cli_args() -> Settings {
         if args[arg_index] == "--to_file" {
             let file_name = args[arg_index + 1].to_string();
             settings.writer = Box::new(FileWriter { file_name })
+        }
+        if args[arg_index] == "--in_file" {
+            settings.look_for_key_entry_in_files = true;
+            settings.key_in_file = args[arg_index + 1].to_string();
         }
         if args[arg_index] == "--sort" { settings.sort_files = true }
     }
