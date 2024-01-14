@@ -1,12 +1,13 @@
 use std::{env, fs};
-use std::rc::Rc;
-use lookup_engine::{DirectoryEntry, LookupConfig};
+use std::sync::Arc;
 
+use lookup_engine::{DirectoryEntry, LookupConfig};
 use writers::{ConsoleWriter, FileWriter, Writer};
 
 mod postprocess;
 mod writers;
 mod lookup_engine;
+mod thread_pool;
 
 fn main() {
     let settings = get_directory_from_cli_args();
@@ -20,7 +21,7 @@ fn main() {
             }
             let result = lookup_engine::process_dir(&settings.start_path,
                                                     LookupConfig::new(empty_string(), settings.target_substring.clone(), settings.sort_files),
-                                                    Rc::new(DirectoryEntry::create_empty()));
+                                                    Arc::new(DirectoryEntry::create_empty()));
             let parsed_and_sorted_result = postprocess::parse_result_vector(result.body, &settings);
             if result.is_successful {
                 settings.writer.write(&parsed_and_sorted_result)

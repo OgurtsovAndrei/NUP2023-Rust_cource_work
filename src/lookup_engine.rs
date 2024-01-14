@@ -1,6 +1,7 @@
-use std::fs::DirEntry;
-use std::rc::Rc;
 use std::fs;
+use std::fs::DirEntry;
+use std::sync::Arc;
+
 use crate::empty_string;
 
 pub struct LookupConfig {
@@ -25,9 +26,9 @@ pub struct LookupResult {
 }
 
 pub enum LookupResultEntry {
-    Directory { directory: Rc<DirectoryEntry> },
-    File { file: Rc<FileEntry> },
-    TextOrRustFile { file: Rc<FileEntry> },
+    Directory { directory: Arc<DirectoryEntry> },
+    File { file: Arc<FileEntry> },
+    TextOrRustFile { file: Arc<FileEntry> },
 }
 
 impl LookupResultEntry {
@@ -61,12 +62,12 @@ impl LookupResultEntry {
 }
 
 pub struct FileEntry {
-    parent: Rc<DirectoryEntry>,
-    entry: Rc<DirEntry>,
+    parent: Arc<DirectoryEntry>,
+    entry: Arc<DirEntry>,
 }
 
 impl FileEntry {
-    fn new(parent: Rc<DirectoryEntry>, entry: DirEntry) -> Self { Self { parent: parent.clone(), entry: Rc::new(entry) } }
+    fn new(parent: Arc<DirectoryEntry>, entry: DirEntry) -> Self { Self { parent: parent.clone(), entry: Arc::new(entry) } }
 
     pub fn get_path(&self) -> String {
         self.entry.path().to_str().unwrap().to_string()
@@ -74,12 +75,12 @@ impl FileEntry {
 }
 
 pub struct DirectoryEntry {
-    entry: Option<Rc<DirEntry>>,
+    entry: Option<Arc<DirEntry>>,
     path: String,
 }
 
 impl DirectoryEntry {
-    fn new(entry: DirEntry, path: String) -> Self { DirectoryEntry { entry: Option::Some(Rc::new(entry)), path } }
+    fn new(entry: DirEntry, path: String) -> Self { DirectoryEntry { entry: Option::Some(Arc::new(entry)), path } }
 
     pub fn create_empty() -> Self { DirectoryEntry { entry: None, path: empty_string() } }
 }
@@ -95,9 +96,9 @@ impl FileSystemEntry for FileEntry {
                 let file_type = self.entry.file_name().to_str().unwrap().to_string();
                 let lookup_result_entry;
                 if file_type.ends_with(".rs") || file_type.ends_with(".txt") {
-                    lookup_result_entry = LookupResultEntry::TextOrRustFile { file: Rc::new(self) };
+                    lookup_result_entry = LookupResultEntry::TextOrRustFile { file: Arc::new(self) };
                 } else {
-                    lookup_result_entry = LookupResultEntry::File { file: Rc::new(self) };
+                    lookup_result_entry = LookupResultEntry::File { file: Arc::new(self) };
                 }
                 return LookupResult { is_successful: true, body: vec![lookup_result_entry] };
             }
@@ -113,11 +114,10 @@ impl FileSystemEntry for DirectoryEntry {
             if lookup_config.write_full_path { new_prefix = format!("{}{dir_name}/", lookup_config.prefix_print); } else { new_prefix = format!("{}  | ", lookup_config.prefix_print); }
             let mut new_subst: String = lookup_config.target_substring.to_string();
             if dir_name.contains(&lookup_config.target_substring) { new_subst = crate::empty_string() }
-            let self_rc = Rc::new(self);
+            let self_rc = Arc::new(self);
             let mut result = process_dir(self_rc.entry.clone().unwrap().path().to_str().unwrap(),
                                          LookupConfig::new(new_prefix, new_subst, lookup_config.write_full_path), self_rc.clone());
             if result.is_successful {
-                // let dir_string = LookupResultEntry { some_prefix: String::from("Dir     : "), path: format!("{}{dir_name}", lookup_config.prefix_print), filename: empty_string(), is_file: false };
                 let dir_entry = LookupResultEntry::Directory { directory: self_rc };
                 result.body.insert(0, dir_entry);
                 return LookupResult { is_successful: result.is_successful, body: result.body };
@@ -127,7 +127,7 @@ impl FileSystemEntry for DirectoryEntry {
     }
 }
 
-pub fn process_dir(path: &str, lookup_config: LookupConfig, dir: Rc<DirectoryEntry>) -> LookupResult {
+pub fn process_dir(path: &str, lookup_config: LookupConfig, dir: Arc<DirectoryEntry>) -> LookupResult {
     let mut is_not_empty = false;
     let mut body: Vec<LookupResultEntry> = vec![];
     if let Ok(entries) = fs::read_dir(path) {
@@ -142,7 +142,7 @@ pub fn process_dir(path: &str, lookup_config: LookupConfig, dir: Rc<DirectoryEnt
     return LookupResult { is_successful: is_not_empty, body };
 }
 
-fn process_entry(entry: Result<DirEntry, std::io::Error>, lookup_config: &LookupConfig, parent: Rc<DirectoryEntry>) -> LookupResult {
+fn process_entry(entry: Result<DirEntry, std::io::Error>, lookup_config: &LookupConfig, parent: Arc<DirectoryEntry>) -> LookupResult {
     let entry = entry.expect("Failed to read directory entry\n");
     let name = entry.file_name().to_str().clone().unwrap().to_string();
     let entry_path = entry.path();

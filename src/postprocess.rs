@@ -3,8 +3,9 @@ use std::io;
 use std::io::BufRead;
 use std::path::Path;
 
-use crate::Settings;
 use crate::lookup_engine::LookupResultEntry;
+use crate::{empty_string, Settings};
+use crate::thread_pool::AsyncMapper;
 
 pub fn parse_result_vector(mut result: Vec<LookupResultEntry>, settings: &Settings) -> String {
     fn sort_by_last_predicate(a: &LookupResultEntry, b: &LookupResultEntry) -> bool {
@@ -22,23 +23,26 @@ pub fn parse_result_vector(mut result: Vec<LookupResultEntry>, settings: &Settin
         }
         result = insertion_sort(files, sort_by_last_predicate);
     }
-    return result.iter().map(|entry| process_one_file(entry, settings)).collect::<Vec<String>>().join("");
+    let key = settings.key_in_file.clone();
+    let look_for_key = settings.look_for_key_entry_in_files;
+    return AsyncMapper::map_async(result, move |entry| process_one_file(entry, look_for_key, key.clone()), 32).join("")
 }
 
-fn process_one_file(file: &LookupResultEntry, settings: &Settings) -> String {
+fn process_one_file(file: LookupResultEntry, look_for_key_entry_in_files: bool, key_in_file: String) -> String {
     let mut result = file.get_full_path() + "\n";
-    if !settings.look_for_key_entry_in_files { return result; }
+    if !look_for_key_entry_in_files { return result; }
     return match file {
         LookupResultEntry::Directory { .. } => { crate::empty_string() }
         LookupResultEntry::File { .. } => { crate::empty_string() }
         LookupResultEntry::TextOrRustFile { file } => {
             let prefix = " ".repeat(8) + "--> ";
             let key_entries: Vec<String>;
-            let key_entries_res = look_for_key_in_file(&file.get_path(), &settings.key_in_file);
+            let key_entries_res = look_for_key_in_file(&file.get_path(), &key_in_file);
             match key_entries_res {
                 Ok(data) => { key_entries = data }
                 Err(_) => { return crate::empty_string(); }
             }
+            if key_entries.is_empty() { return empty_string() }
             for key_entry in key_entries.iter() {
                 result.push_str(&format!("{}{}\n", prefix, key_entry))
             }
