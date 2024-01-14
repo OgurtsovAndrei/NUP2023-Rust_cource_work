@@ -15,9 +15,9 @@ pub fn parse_result_vector(mut result: Vec<LookupResultEntry>, settings: &Settin
         let mut files = vec![];
         for entry in result.into_iter() {
             match &entry {
-                LookupResultEntry::File { file: _ } => { files.push(entry) }
-                LookupResultEntry::RustFile { file: _ } => { files.push(entry) }
-                LookupResultEntry::Directory { directory: _ } => {}
+                LookupResultEntry::File { .. } => { files.push(entry) }
+                LookupResultEntry::TextOrRustFile { .. } => { files.push(entry) }
+                LookupResultEntry::Directory { .. } => {}
             }
         }
         result = insertion_sort(files, sort_by_last_predicate);
@@ -29,9 +29,9 @@ fn process_one_file(file: &LookupResultEntry, settings: &Settings) -> String {
     let mut result = file.get_full_path() + "\n";
     if !settings.look_for_key_entry_in_files { return result; }
     return match file {
-        LookupResultEntry::Directory { directory: _ } => { crate::empty_string() }
-        LookupResultEntry::File { file: _ } => { crate::empty_string() }
-        LookupResultEntry::RustFile { file } => {
+        LookupResultEntry::Directory { .. } => { crate::empty_string() }
+        LookupResultEntry::File { .. } => { crate::empty_string() }
+        LookupResultEntry::TextOrRustFile { file } => {
             let prefix = " ".repeat(8) + "--> ";
             let key_entries: Vec<String>;
             let key_entries_res = look_for_key_in_file(&file.get_path(), &settings.key_in_file);

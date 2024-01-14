@@ -3,7 +3,6 @@ use std::rc::Rc;
 use std::fs;
 use crate::empty_string;
 
-#[derive(Clone)]
 pub struct LookupConfig {
     prefix_print: String,
     target_substring: String,
@@ -28,7 +27,7 @@ pub struct LookupResult {
 pub enum LookupResultEntry {
     Directory { directory: Rc<DirectoryEntry> },
     File { file: Rc<FileEntry> },
-    RustFile { file: Rc<FileEntry> },
+    TextOrRustFile { file: Rc<FileEntry> },
 }
 
 impl LookupResultEntry {
@@ -40,7 +39,7 @@ impl LookupResultEntry {
             LookupResultEntry::File { file } => {
                 format!("SomeFile  : {}/{}", file.parent.path, file.entry.file_name().to_str().unwrap())
             }
-            LookupResultEntry::RustFile { file } => {
+            LookupResultEntry::TextOrRustFile { file } => {
                 format!("RustFile  : {}/{}", file.parent.path, file.entry.file_name().to_str().unwrap())
             }
         }
@@ -54,7 +53,7 @@ impl LookupResultEntry {
             LookupResultEntry::File { file } => {
                 file.entry.file_name().to_str().unwrap().to_string()
             }
-            LookupResultEntry::RustFile { file } => {
+            LookupResultEntry::TextOrRustFile { file } => {
                 file.entry.file_name().to_str().unwrap().to_string()
             }
         }
@@ -96,7 +95,7 @@ impl FileSystemEntry for FileEntry {
                 let file_type = self.entry.file_name().to_str().unwrap().to_string();
                 let lookup_result_entry;
                 if file_type.ends_with(".rs") || file_type.ends_with(".txt") {
-                    lookup_result_entry = LookupResultEntry::RustFile { file: Rc::new(self) };
+                    lookup_result_entry = LookupResultEntry::TextOrRustFile { file: Rc::new(self) };
                 } else {
                     lookup_result_entry = LookupResultEntry::File { file: Rc::new(self) };
                 }
